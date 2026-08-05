@@ -249,6 +249,10 @@
 #define PAGE_PAYLOAD_FOPS 0
 #define PAGE_PAYLOAD_SLIDE 1
 
+#ifndef SLIDE_ALIGN_MASK
+#define SLIDE_ALIGN_MASK 0xffffULL
+#endif
+
 /* --- controlled-mm (mcast route) reclaim tuning --------------------------- */
 #ifndef PAGE_SCAN_MAX
 #define PAGE_SCAN_MAX 256

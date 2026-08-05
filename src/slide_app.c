@@ -866,7 +866,7 @@ int slide_leak_kernel_base(void) {
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
     if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & 0xffffULL) != 0) {
+        (value & SLIDE_ALIGN_MASK) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }
@@ -918,7 +918,7 @@ int slide_leak_kernel_base(void) {
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
     if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & 0xffffULL) != 0) {
+        (value & SLIDE_ALIGN_MASK) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }
