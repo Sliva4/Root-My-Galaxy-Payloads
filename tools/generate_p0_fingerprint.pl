@@ -18,8 +18,16 @@ close $image_fh or die "close $image_path: $!\n";
 
 my @page_offsets = (0x000, 0x200, 0x400, 0x600,
                     0x800, 0xa00, 0xc00, 0xe00);
+
+# 5.15.x kernels slide at 0x8000 granularity, so they need a finer
+# fingerprint (63 rows) than the default 0x10000 granularity (32 rows).
+# Detect the kernel version string embedded in the image and pick the
+# matching slide step automatically.
+my $step  = $image =~ /Linux version 5\.15\.\d+/ ? 0x8000 : 0x10000;
+my $rows  = $step == 0x8000 ? 63 : 32;
+
 my @rows;
-for my $slide (map { $_ * 0x10000 } 0 .. 31) {
+for my $slide (map { $_ * $step } 0 .. $rows - 1) {
     my $page_source = $probe_offset - $slide;
     $page_source >= 0
         or die sprintf("slide 0x%x exceeds probe offset 0x%x\n",
@@ -91,5 +99,6 @@ for my $row (@rows) {
     }
 }
 close $verify_fh or die "close verification input: $!\n";
-printf "verified 32 rows and 256 source qwords at probe 0x%x\n",
-       $probe_offset;
+printf "verified %d rows and %d source qwords at probe 0x%x (slide step 0x%x)\n",
+       scalar(@rows), scalar(@rows) * scalar(@page_offsets), $probe_offset,
+       $step;
