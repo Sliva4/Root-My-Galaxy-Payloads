@@ -2,9 +2,9 @@
 use strict;
 use warnings;
 
-@ARGV == 3 or die
-    "usage: $0 RAW_IMAGE PROBE_OFFSET OUTPUT_HEADER\n";
-my ($image_path, $probe_text, $output_path) = @ARGV;
+@ARGV == 4 or die
+    "usage: $0 RAW_IMAGE PROBE_OFFSET TARGET_H OUTPUT_HEADER\n";
+my ($image_path, $probe_text, $target_h, $output_path) = @ARGV;
 
 $probe_text =~ /\A(?:0x)?[0-9a-fA-F]+\z/
     or die "invalid probe offset: $probe_text\n";
@@ -12,19 +12,29 @@ my $probe_offset = hex($probe_text);
 
 open my $image_fh, '<:raw', $image_path
     or die "open $image_path: $!\n";
-local $/;
-my $image = <$image_fh>;
+my $image;
+{
+    local $/;
+    $image = <$image_fh>;
+}
 close $image_fh or die "close $image_path: $!\n";
 
 my @page_offsets = (0x000, 0x200, 0x400, 0x600,
                     0x800, 0xa00, 0xc00, 0xe00);
 
-# 5.15.x kernels slide at 0x8000 granularity, so they need a finer
-# fingerprint (63 rows) than the default 0x10000 granularity (32 rows).
-# Detect the kernel version string embedded in the image and pick the
-# matching slide step automatically.
-my $step  = $image =~ /Linux version 5\.15\.\d+/ ? 0x8000 : 0x10000;
-my $rows  = $step == 0x8000 ? 63 : 32;
+# KASLR slide step: prefer SLIDE_KASLR_STEP defined in the target header,
+# otherwise fall back to the default 0x10000 (64KB).
+my $step = 0x10000;
+if (open my $tf, '<', $target_h) {
+    while (<$tf>) {
+        if (/^\s*#\s*define\s+SLIDE_KASLR_STEP\s+0x([0-9a-fA-F]+)/) {
+            $step = hex($1);
+            last;
+        }
+    }
+    close $tf;
+}
+my $rows = int($probe_offset / $step) + 1;
 
 my @rows;
 for my $slide (map { $_ * $step } 0 .. $rows - 1) {

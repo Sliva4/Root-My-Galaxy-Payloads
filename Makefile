@@ -23,6 +23,8 @@ PRELOAD_SRCS := \
   src/slide_app.c \
   src/pselect.c \
   src/mcast.c \
+  src/fpsimd.c \
+  src/page.c \
   src/fops.c \
   src/oracle.c \
   src/pipe.c \
@@ -35,6 +37,8 @@ APP_PRELOAD_SRCS := \
   src/slide_app.c \
   src/pselect.c \
   src/mcast.c \
+  src/fpsimd.c \
+  src/page.c \
   src/fops.c \
   src/oracle.c \
   src/pipe.c \

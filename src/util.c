@@ -109,6 +109,8 @@ void log_startup_context(void) {
   const char *slide_source = "pselect";
 #if SLIDE_USE_MCAST
   slide_source = "mcast";
+#elif SLIDE_USE_FPSIMD
+  slide_source = "fpsimd";
 #endif
 #ifdef NON_APP
   slide_source = "tracefs";
@@ -116,6 +118,8 @@ void log_startup_context(void) {
   const char *main_route = "pselect";
 #if SLIDE_USE_MCAST
   main_route = "mcast";
+#elif SLIDE_USE_FPSIMD
+  main_route = "fpsimd";
 #endif
   pr_success("build config pid=%d label=%s slide=%s main=%s\n",
              getpid(), BUILD_VARIANT_LABEL, slide_source, main_route);
