@@ -6,7 +6,7 @@
  * ------------------------------------------------------------------------- */
 #define BUILD_VARIANT_LABEL "a54x-A546EXXSKFZF4-app"
 #define PHYS_P0_ORACLE 1
-#define SLIDE_ROUTE SLIDE_ROUTE_FPSIMD
+#define SLIDE_ROUTE SLIDE_ROUTE_MCAST
 
 #ifndef BUILD_FINGERPRINT
 #define BUILD_FINGERPRINT \
