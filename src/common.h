@@ -184,6 +184,9 @@
 #ifndef PIPE_MAX_ATTEMPTS
 #define PIPE_MAX_ATTEMPTS 12
 #endif
+#ifndef PIPE_FIRST_LEAK_ATTEMPTS
+#define PIPE_FIRST_LEAK_ATTEMPTS 12
+#endif
 
 /* ============================= P0 / data alias ============================= */
 

