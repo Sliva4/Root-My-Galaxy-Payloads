@@ -1,7 +1,7 @@
 #include "common.h"
 #include "kernelsnitch/kernelsnitch.h"
 
-#if SLIDE_USE_MCAST || SLIDE_USE_FPSIMD
+#if defined(CONTROLLED_MM_GROUP_RECLAIM) && CONTROLLED_MM_GROUP_RECLAIM
 
 enum controlled_mm_zone {
   CONTROLLED_MM_INVALID,
@@ -376,7 +376,7 @@ static int drain_controlled_mm_group(
   return 1;
 }
 
-uintptr_t prepare_controlled_kernel_page(int payload_mode) {
+uintptr_t prepare_kernel_page(int payload_mode) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   int *target_fds;
   int shaping_sv[2] = {-1, -1};
@@ -476,9 +476,8 @@ uintptr_t prepare_controlled_kernel_page(int payload_mode) {
           stop_errno, base, payload_mode);
   return sent_count ? base : 0;
 }
-#endif /* SLIDE_USE_MCAST || SLIDE_USE_FPSIMD */
 
-#if SLIDE_USE_PSELECT
+#else
 
 #if defined(PHYS_VIRTUAL_BASE_ORACLE) && PHYS_VIRTUAL_BASE_ORACLE
 static void cleanup_failed_kernel_page(const char *reason) {
@@ -911,4 +910,4 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   return base;
 }
 
-#endif /* SLIDE_USE_PSELECT */
+#endif

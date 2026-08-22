@@ -71,10 +71,6 @@ static void fpsimd_install_handler(void) {
   SYSCHK(sigaction(SIGUSR2, &action, NULL));
 }
 
-uintptr_t prepare_kernel_page(int payload_mode) {
-  return prepare_controlled_kernel_page(payload_mode);
-}
-
 void slide_fpsimd_stack_copy(void) {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   uintptr_t tree_parent = slide_oracle_parent;

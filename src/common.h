@@ -554,7 +554,6 @@ void prepare_ctxs(void);
 int prepare_skb_payload(uintptr_t base, int payload_mode);
 uintptr_t prepare_kernel_page(int payload_mode);
 uintptr_t prepare_good_kernel_page(int payload_mode);
-uintptr_t prepare_controlled_kernel_page(int payload_mode);
 
 #if !defined(PHYS_P0_ORACLE) || !PHYS_P0_ORACLE || SLIDE_USE_PSELECT
 void fdset_put_word(fd_set *set, int word, uint64_t value);

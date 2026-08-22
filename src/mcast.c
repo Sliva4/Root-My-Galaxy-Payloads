@@ -3,10 +3,6 @@
 
 #if SLIDE_USE_MCAST
 
-uintptr_t prepare_kernel_page(int payload_mode) {
-  return prepare_controlled_kernel_page(payload_mode);
-}
-
 void slide_build_fake_waiter(unsigned char *payload, size_t waiter_off) {
   uintptr_t tree_parent = slide_oracle_parent;
   uintptr_t tree_right = 0;
