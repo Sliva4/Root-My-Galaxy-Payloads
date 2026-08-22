@@ -190,6 +190,10 @@
       "kernelsu": {
         "url": "https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads/main/kernelsu/ksud-a54x-A546EXXSKFZF4-kdp",
         "size": 3828432
+      },
+      "kernelsu-next": {
+        "url": "https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads/main/kernelsu/ksud-next-a54x-A546EXXSKFZF4-kdp",
+        "size": 4083520
       }
     },
     {
@@ -204,6 +208,10 @@
       "kernelsu": {
         "url": "https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads/main/kernelsu/ksud-a54x-A546EXXSKFZF4-kdp",
         "size": 3828432
+      },
+      "kernelsu-next": {
+        "url": "https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads/main/kernelsu/ksud-next-a54x-A546EXXSKFZF4-kdp",
+        "size": 4083520
       }
     }
   ]
