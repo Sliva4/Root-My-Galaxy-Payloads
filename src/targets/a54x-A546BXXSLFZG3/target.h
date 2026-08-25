@@ -63,6 +63,8 @@
 #define P0_ORACLE_PROBE_OFFSET 0x1f0000ULL
 #define P0_FINGERPRINT_HEADER \
   "targets/a54x-A546BXXSLFZG3/p0_fingerprint.h"
+#define P0_FINGERPRINT_MIN_BEST 5
+#define P0_FINGERPRINT_MIN_MARGIN 3
 
 /* ---------------------------------------------------------------------------
  * KASLR slide (p0 offset candidates + tracefs worker)

