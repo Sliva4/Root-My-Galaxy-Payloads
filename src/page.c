@@ -94,7 +94,11 @@ static int controlled_mm_leak(size_t cpu_count, uintptr_t hint,
     if (!state) {
       return -1;
     }
+#ifdef SLIDE_KSNITCH_REPEAT_MEASUREMENT
+    kernelsnitch_set_profile(state, 256, SLIDE_KSNITCH_REPEAT_MEASUREMENT, SLIDE_KSNITCH_AVERAGE);
+#else
     kernelsnitch_set_profile(state, 256, REPEAT_MEASUREMENT, AVERAGE);
+#endif
     child = clone_controlled_leak_child(state);
     fd = open_memfd(child);
     int child_ok = waitpid(child, &status, 0) == child && WIFEXITED(status) &&

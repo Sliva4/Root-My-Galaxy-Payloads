@@ -25,7 +25,7 @@
  * ------------------------------------------------------------------------- */
 #define SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS 2
 #define FOPS_KERNEL_PAGE_SETUP_ATTEMPTS 2
-#define FOPS_ROUTE_COARSE_DELAY_USEC 50000
+#define FOPS_ROUTE_COARSE_DELAY_USEC 40000
 #define FOPS_ROUTE_FINE_DELAY_TICKS \
   0ULL, 0x10ULL, 0x20ULL, 0x30ULL, 0x40ULL, 0x60ULL, 0x80ULL, 0x18ULL
 #define PRODUCTION_STACK_PI_RIGHT_ONLY 1
@@ -93,8 +93,8 @@
 
 /* --- slide kernelsnitch tuning ------------------------------------------- */
 #define SLIDE_KSNITCH_APPENDED_FUTEXES 2048
-#define SLIDE_KSNITCH_REPEAT_MEASUREMENT 64
-#define SLIDE_KSNITCH_AVERAGE 8
+#define SLIDE_KSNITCH_REPEAT_MEASUREMENT 24
+#define SLIDE_KSNITCH_AVERAGE 4
 
 /* --- controlled-mm bank layout ------------------------------------------- */
 #define SLIDE_BANK_SLOTS 4

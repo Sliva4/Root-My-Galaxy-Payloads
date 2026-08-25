@@ -113,9 +113,24 @@ static void *__do_increase(void *arg)
     struct inc_arg *inc_arg = (struct inc_arg *)arg;
     struct kernelsnitch_shared_state *ks = inc_arg->ks;
     size_t id = inc_arg->id;
-    SYSCHK(__futex((unsigned int *)&ks->inc_futex[id], FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0));
-    free(inc_arg);
-    return 0;
+    free(arg);
+    /*
+     * Block until woken.  A waiter racing the teardown value-flip lands
+     * here after the wake already fired; EAGAIN means the pile is being
+     * torn down, which is a normal exit for a latecomer - never fatal.
+     */
+    for (;;) {
+        long r = syscall(SYS_futex,
+                         (unsigned int *)&ks->inc_futex[id],
+                         FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
+        if (r == -1 && errno == EAGAIN)
+            return NULL;
+        if (r == 0)
+            return NULL;
+        /* Unexpected error: leave quietly rather than kill the process
+         * from a helper thread. */
+        return NULL;
+    }
 }
 
 /**
@@ -144,10 +159,17 @@ static void __decrease(struct kernelsnitch_shared_state *ks)
 {
     if (!ks->increase_tids)
         return;
+    /*
+     * Flip the value before waking: a waiter that has not yet entered the
+     * futex syscall rechecks *uaddr in-kernel, sees the mismatch and
+     * returns EAGAIN instead of sleeping forever and blocking the join.
+     */
+    ks->inc_futex[ks->increase_id] = 1;
     SYSCHK(__futex((unsigned int *)&ks->inc_futex[ks->increase_id],
                    FUTEX_WAKE_PRIVATE, INT_MAX, NULL, NULL, 0));
     for (size_t i = 0; i < ks->increase_count; ++i)
         SYSCHK(pthread_join(ks->increase_tids[i], NULL));
+    ks->inc_futex[ks->increase_id] = 0;
     free(ks->increase_tids);
     ks->increase_tids = NULL;
     ks->increase_count = 0;
