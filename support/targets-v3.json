@@ -8,7 +8,7 @@
       "kernelVersions": ["5.15.180"],
       "exploit": {
         "url": "https://raw.githubusercontent.com/Sliva4/Root-My-Galaxy-Payloads/a54x/artifacts/a35x-A356EXXU5CYI8/cve-2026-43499-app.so",
-        "size": 125608
+        "size": 132280
       },
       "kernelsu": {
         "url": "https://raw.githubusercontent.com/Sliva4/Root-My-Galaxy-Payloads/a54x/kernelsu/ksud-a54x-A546EXXSKFZF4-kdp",
