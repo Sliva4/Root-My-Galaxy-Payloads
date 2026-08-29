@@ -146,7 +146,7 @@
 
 /* --- ashmem / configfs / fops gadgets ------------------------------------- */
 #define ASHMEM_FOPS_OFF           0x0199fd3f0ULL
-#define ASHMEM_MISC_FOPS_OFF      0x02405440ULL
+#define ASHMEM_MISC_FOPS_OFF      0x02405450ULL
 #define ASHMEM_IOCTL_OFF          0x00c83ed8ULL
 #define ASHMEM_COMPAT_IOCTL_OFF   0x00c84490ULL
 #define ASHMEM_MMAP_OFF           0x00c844e8ULL
